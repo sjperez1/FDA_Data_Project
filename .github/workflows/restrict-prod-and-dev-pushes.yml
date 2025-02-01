@@ -1,0 +1,51 @@
+name: Enforce Branching Rules
+
+on:
+  push:
+    branches:
+      - prod
+      - dev
+
+jobs:
+  enforce-branch-rules:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # Block direct pushes to prod unless they come from dev
+      - name: Restrict Direct Push to Prod
+        if: github.ref == 'refs/heads/prod'
+        run: |
+          # Get the commit before the push
+          PREV_COMMIT=$(git rev-parse HEAD^)
+
+          # Get the previous branch (source of the merge)
+          LAST_BRANCH=$(git log --pretty=format:'%d' -1 | grep -oE 'origin/[a-zA-Z0-9_\-/]+' | sed 's/origin\///' | head -n 1)
+
+          if [[ "$LAST_BRANCH" != "dev" ]]; then
+            echo "ERROR: Only merges from 'dev' are allowed into 'prod'!"
+            exit 1
+          fi
+
+      # Block direct pushes to dev unless they came from an approved PR
+      - name: Restrict Direct Push to Dev (Require Approved PR)
+        if: github.ref == 'refs/heads/dev'
+        run: |
+          # Get the commit SHA of the latest push
+          LATEST_COMMIT=$(git rev-parse HEAD)
+
+          # Fetch merged PRs targeting dev
+          MERGED_PR=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls?base=dev&state=closed" \
+            | jq -r '[.[] | select(.merged_at != null)] | map(select(.merge_commit_sha == "'$LATEST_COMMIT'")) | length')
+
+          if [[ "$MERGED_PR" -eq 0 ]]; then
+            echo "ERROR: This commit was not from an approved & merged PR."
+            exit 1
+          fi
+
+      - name: Success
+        run: echo "Validation passed, push allowed!"
